@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.2.0
+
+Port to omp (oh-my-pi) 18.11.1. Verified end to end in omp: provider
+registration, `omp models opencode-zen-free`, and a turn whose tool call ran
+through omp's own `read` tool.
+
+- Registration uses omp's extension API (`pi.registerProvider(id, config)` with
+  an extension-owned api id and `streamSimple`), replacing the Pi
+  `createProvider` / `registerApiProvider` / `api` map surface, which omp does
+  not provide.
+- Transport delegates to omp's own `streamSimple`, so streaming, tool calls,
+  reasoning, usage, and aborts behave exactly as they do for a built-in
+  provider.
+- Free roster comes from omp's bundled `opencode-zen` catalogue
+  (`@oh-my-pi/pi-catalog/models`); `fetchDynamicModels` refreshes it from
+  `GET /zen/v1/models` and the host caches discovery with the static list as
+  fallback.
+- Credential precedence: `/login opencode-zen-free` → `OPENCODE_API_KEY` →
+  anonymous `public`.
+- Request identity: base URL `https://opencode.ai/zen/v1`, a `ses_` id minted
+  per omp session in `x-opencode-session`, `x-opencode-client: cli`, UA
+  `opencode/latest/2.0.26/cli`, and `Authorization`. Auxiliary calls without
+  tools get one inert `read` placeholder plus a note; caller tools, history,
+  and system prompts are never rewritten.
+- Responses-lane rotation is retried once with stale `reasoning` items
+  stripped (unchanged behaviour, same helper).
+- Removed as unnecessary, each verified by live probe: the `read` →
+  `read_client` alias (the gate checks tool names, not definitions; aliasing is
+  what makes a model call the wrong tool), the OpenCode compaction-prompt swap
+  (system-prompt content is not gated), the pi-ai compat-registry patch, the
+  global fetch guard, and the `node:http` guard (all Pi side-channel plumbing).
+- Debug switch renamed to `OMP_OPENCODE_FREE_DEBUG`.
+- Tests run under Bun. The fixture suite covers session minting and decoding,
+  credential precedence, tool passthrough and placeholder injection, request
+  identity, catalogue filtering, rotation retry, and a stubbed SSE stream with
+  a tool call. `bun run test/live` exercises both wire lanes against the real
+  anonymous free tier, including a tool-less compaction-style request.
+
 ## 0.1.9
 
 - Auto-register unknown free Zen models (e.g. `step-5-preview-free`):

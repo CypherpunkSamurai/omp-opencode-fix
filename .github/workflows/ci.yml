@@ -12,14 +12,16 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node: [22, 24, 26]
+        bun: [1.2.x, latest]
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ matrix.bun }}
       - uses: actions/setup-node@v7
         with:
-          node-version: ${{ matrix.node }}
-          cache: npm
+          node-version: 22
       - run: npm ci --ignore-scripts
       - run: npm run verify

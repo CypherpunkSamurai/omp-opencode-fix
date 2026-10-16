@@ -1,12 +1,14 @@
 {
-  "name": "pi-opencode-direct",
-  "version": "0.1.9",
-  "description": "Keyless OpenCode Zen free models for Pi, using native HTTP APIs",
+  "name": "omp-opencode-fix",
+  "version": "0.2.0",
+  "description": "OpenCode Zen free models for omp (oh-my-pi), using native HTTP APIs and the OpenCode free-tier fingerprint",
   "type": "module",
   "license": "MIT",
   "keywords": [
     "pi-package",
-    "pi",
+    "pi-extension",
+    "omp",
+    "oh-my-pi",
     "opencode",
     "zen"
   ],
@@ -16,15 +18,20 @@
     "LICENSE",
     "CHANGELOG.md"
   ],
+  "omp": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
   "pi": {
     "extensions": [
       "./src/index.ts"
     ]
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test test/*.test.ts",
-    "check": "tsc --noEmit",
-    "test:live": "node --experimental-strip-types test/live.ts",
+    "test": "bun test test/provider.test.ts",
+    "check": "node ./node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
+    "test:live": "bun run test/live.ts",
     "check:package": "npm pack --dry-run --ignore-scripts",
     "verify": "npm run check && npm test && npm run check:package",
     "prepublishOnly": "npm run verify"
@@ -33,12 +40,14 @@
     "node": ">=22.19.0"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*"
+    "@oh-my-pi/pi-ai": "*",
+    "@oh-my-pi/pi-catalog": "*",
+    "@oh-my-pi/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.86.1",
-    "@earendil-works/pi-coding-agent": "0.86.1",
+    "@oh-my-pi/pi-ai": "18.11.1",
+    "@oh-my-pi/pi-catalog": "18.11.1",
+    "@oh-my-pi/pi-coding-agent": "18.11.1",
     "@types/node": "^22.0.0",
     "typescript": "^5.9.0"
   },
@@ -48,10 +57,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Aymendje/pi-opencode-direct.git"
+    "url": "git+https://github.com/CypherpunkSamurai/omp-opencode-fix.git"
   },
-  "homepage": "https://github.com/Aymendje/pi-opencode-direct#readme",
+  "homepage": "https://github.com/CypherpunkSamurai/omp-opencode-fix#readme",
   "bugs": {
-    "url": "https://github.com/Aymendje/pi-opencode-direct/issues"
+    "url": "https://github.com/CypherpunkSamurai/omp-opencode-fix/issues"
   }
 }

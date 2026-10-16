@@ -1,62 +1,52 @@
 # Publishing
 
-## First release
+## Name and links
 
-The package name is `pi-opencode-direct`. It was not listed on npm when checked
-on 2026-09-10; availability is not reserved until publication.
+The package name is `omp-opencode-fix`. Repository, homepage, and issue links
+point to https://github.com/CypherpunkSamurai/omp-opencode-fix.
 
-Repository, homepage, and issue links point to
-https://github.com/Aymendje/pi-opencode-direct. Keep `pi.extensions` and the
-`pi-package` keyword:
-[Pi's gallery](https://pi.dev/docs/latest/packages) discovers npm packages by
-that keyword. No compiled build is needed; Pi loads the shipped TypeScript.
+Keep the `pi-package` keyword and both manifest keys (`omp.extensions`,
+`pi.extensions`): omp and Pi both discover installed plugin packages by their
+package manifest, and the legacy key costs nothing.
 
-From the repository root:
+## No build step
+
+omp loads the shipped TypeScript with Bun. `files` ships `src/**/*.ts`,
+`README.md`, `LICENSE`, and `CHANGELOG.md`; tests, CI, `node_modules`, and local
+settings stay out.
+
+## Dependencies
+
+`@oh-my-pi/pi-ai`, `@oh-my-pi/pi-catalog`, and `@oh-my-pi/pi-coding-agent` are
+peer-only. omp's extension loader rewrites canonical `@oh-my-pi/pi-*` specifiers
+(including subpaths such as `@oh-my-pi/pi-catalog/models`) onto the host's
+in-process modules, so a plugin does not need its own copy on disk. Verified by
+deleting `node_modules` from a checkout: `omp models opencode-zen-free` still
+loaded the extension and listed the roster. The same packages are pinned in
+`devDependencies` for type checking and fixture tests; bump them together when
+re-validating against a new omp.
+
+## Release
 
 ```sh
 npm ci --ignore-scripts
-npm run verify
-npm pack --dry-run
+npm run verify           # tsc + Bun fixture tests + pack dry run
+
+bun run test/live        # optional: real anonymous free-tier requests
 ```
 
-The tarball should contain only `package.json`, `src/index.ts`,
-`src/provider.ts`, `README.md`, `CHANGELOG.md`, and `LICENSE`. Tests, CI,
-node_modules, and local settings are excluded. `@earendil-works/pi-ai` is a
-real dependency (pinned to the validated Pi version), not peer-only: Pi
-installs extensions with `--legacy-peer-deps`, which never auto-installs
-peers, so a peer-only declaration fails to load on machines where no sibling
-extension happens to provide `pi-ai` (`Cannot find module
-... openai-completions.lazy`). Keep the peer entries too for dedupe
-signaling, and bump the pinned dependency together with `devDependencies`
-when re-validating against a new Pi. `@earendil-works/pi-coding-agent` stays
-peer-only: it is imported as types, which are erased before runtime.
-
-Commit and push the reviewed release, then authenticate with the npm account
-that will own the package and publish:
+Commit and push the reviewed release, then publish with the npm account that
+owns the name:
 
 ```sh
 npm login
 npm publish --access public
 ```
 
-`prepublishOnly` runs the verification checks again. CI only verifies changes;
-it does not publish. After publication, verify a clean Pi installation with:
+After publishing, confirm the installed plugin in omp:
 
 ```sh
-pi install npm:pi-opencode-direct
+omp plugin install omp-opencode-fix
+omp plugin doctor
+omp models opencode-zen-free
 ```
-
-Select **OpenCode Zen Free** in `/model`. Allow time for the Pi gallery to index
-the npm package.
-
-## Later releases
-
-Update `CHANGELOG.md`, bump the package version with
-`npm version patch --no-git-tag-version` (or `minor` / `major`), and update both
-User-Agent version strings in `src/provider.ts`. If re-validating against a
-newer Pi, bump the pinned `@earendil-works/pi-ai` entry in both `dependencies`
-and `devDependencies` to the new Pi version first. Run verification, review and
-commit the release, then publish. Each npm version can only be published once.
-
-Live verification is optional: `npm run test:live` sends two real free-tier
-requests. Regular verification uses fixtures and needs no model credentials.

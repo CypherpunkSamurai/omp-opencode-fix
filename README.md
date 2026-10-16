@@ -1,137 +1,149 @@
-# pi-opencode-direct
+# omp-opencode-fix
 
-Free OpenCode Zen models in Pi through native HTTP requests. No OpenCode
-installation, login, API key, server, container, or LiteLLM is required.
+OpenCode Zen's free models in [omp](https://github.com/can1357/oh-my-pi) through
+native HTTP requests. No OpenCode installation, login, API key, server,
+container, or proxy is required.
+
+This is the omp port of `pi-opencode-direct`. The transport half is gone: omp
+already streams, sends tools, and has an `openai-completions` /
+`openai-responses` implementation, so the extension only supplies the identity
+the Zen free tier checks and delegates the wire work to omp.
 
 ## Install
 
-Requires Pi 0.85.1 or newer (tested with 1.3.0) and Node 22.19 or newer.
+Requires omp 18.11.1 or newer (tested against 18.11.1) and Bun as the omp
+runtime.
 
 ```sh
-pi install npm:pi-opencode-direct
+omp plugin install omp-opencode-fix     # published package
+omp plugin link .                       # or a checkout, symlinked into omp
 ```
 
-For development, run `npm ci --ignore-scripts` followed by `pi install .`
-from a checkout of this repository. Install through npm or Pi so that peer
-packages needed by the native transport imports are available.
-
-Restart Pi or use `/reload`, then select **OpenCode Zen Free** in `/model`.
+Restart omp, then select **OpenCode Zen Free** in `/model`:
 
 ```sh
-pi --provider opencode-zen-free --model muse-spark-1.3-contributor-free --thinking xhigh
+omp --provider opencode-zen-free --model muse-spark-1.3-contributor-free
+omp models opencode-zen-free            # the free roster
 ```
 
-Muse Spark supports native images, reasoning, and tool calls. Pi's thinking
-selector exposes `minimal`, `low`, `medium`, `high`, and `xhigh`. An explicit Pi
-thinking setting wins; requests without one default to `xhigh` for Muse Spark.
-The provider also registers the other known free models supported by Pi's
-Chat Completions transport. Their capabilities and limits come from Pi's
-built-in OpenCode catalogue rather than guessed defaults.
+Every model in omp's bundled `opencode-zen` catalogue whose cost is zero and
+whose wire API is `openai-completions` or `openai-responses` is registered:
+`muse-spark-1.2/1.3-contributor-free` (Responses lane), plus the Chat
+Completions free models (`longcat-2.5-preview-free`, `mimo-v2.6-flash-free`,
+`nemotron-3.5-*`, `space-bunny-free`, `step-5-preview-free`, …).
+Anthropic- and Google-lane free ids are out of scope, and paid models are never
+registered. `fetchDynamicModels` refreshes the roster from
+`GET /zen/v1/models`; ids omp's catalogue has not seen yet (for example
+`deepseek-v4.1-flash-free`) are registered with conservative metadata until
+official metadata ships.
+
+## Credentials
+
+Anonymous by default: the literal `public` bearer is sent and no credential is
+read. Precedence is
+
+1. a stored `/login opencode-zen-free` credential,
+2. `OPENCODE_API_KEY`,
+3. anonymous.
+
+```sh
+omp    # then: /login opencode-zen-free
+```
 
 ## How it works
 
-The extension adds a separate `opencode-zen-free` provider. It uses Pi's native
-Responses transport for Muse Spark and native Chat Completions for the other
-supported free models. Native Pi streaming handles text, thinking, tool-call
-arguments, usage, aborts, and tool-result replay. Tools execute through Pi.
+The extension registers a separate provider id (`opencode-zen-free`) because
+omp's built-in `opencode-zen` overwrites `x-opencode-session` with the
+conversation id (`applyInferenceHeaders` hardcodes that provider id), and the
+gate rejects a UUID. A distinct id keeps omp's identity projection out of the
+request; the extension then writes its own headers and delegates to omp's own
+`streamSimple` with the model's real wire API.
 
-Requests are anonymous by default: without any configured key the literal
-`public` bearer is used and no credentials are sent. If the anonymous tier
-rejects you (`FreeTierError ... within OpenCode` on every request, even tiny
-ones — upstream gates anonymous access by more than headers, e.g. egress IP
-reputation), attach a Zen key instead: `/login opencode-zen-free`, or set
-`OPENCODE_API_KEY`. Priority is stored credential, then `OPENCODE_API_KEY`,
-then anonymous; an explicitly passed `--api-key` is honored the same way.
+What every request carries:
 
-Anonymous summarization additionally sends OpenCode's byte-identical compaction
-system prompt instead of Pi's: Zen gates anonymous free tier on that developer
-content (identical requests with Pi's text 403, with OpenCode's text pass). Only
-short standalone summarization prompts are rewritten, never conversation content
-or keyed requests.
+| Piece | Value |
+| --- | --- |
+| `baseUrl` | `https://opencode.ai/zen/v1` |
+| `Authorization` | `Bearer public`, a stored Zen key, or `OPENCODE_API_KEY` |
+| `x-opencode-session` | `ses_` + 12 hex + 14 base62, minted once per omp session |
+| `x-opencode-client` | `cli` |
+| `User-Agent` | `opencode/latest/2.0.26/cli` |
+| `stream` | always `true` (omp streams every turn) |
+| tools | the caller's tools, unrenamed |
 
-Anonymous quota is shared per egress IP (server-side trial bucket counting input +
-output + reasoning tokens), so heavy anonymous traffic from one IP — large Hermes
-reviews, compactions, or many clients behind one NAT/egress proxy — can exhaust
-it for everyone behind that IP with `FreeTierError`, while the genuine CLI from
-a fresh IP keeps working. If anonymous fails everywhere at once, wait for the
-window to reset and move heavy background work to a keyed model; light chat
-spends little. Set `PI_OPENCODE_DIRECT_DEBUG=1` to log outbound identity.
-A generated OpenCode session id (timestamp-based `ses_` id, cached per Pi
-session) supplies `x-opencode-session` and the full correlation set
-(`x-opencode-session-id` / `x-session-affinity` / `X-Session-Id`), keeping
-routing affinity stable across turns and distinct between sessions. Auxiliary
-calls use the active Pi session when no explicit session ID is available.
+Nothing else is rewritten. Caller tools, tool-call history, and system prompts
+pass through untouched, so a tool call always resolves against the tool the
+model was shown. The Pi version aliased a colliding `read` tool to `read_client`
+and swapped the compaction system prompt; live probing (below) shows neither is
+needed here, and both are exactly the kind of rewriting that breaks tool calls
+once several prompts are mixed.
 
-A bounded public-catalogue refresh intersects the currently listed IDs with
-Pi's known zero-cost models. Paid models are not registered; unknown
-free-looking IDs get conservative synthetic entries (Chat Completions
-transport) until official metadata arrives via `pi update --models`.
-Pi's model cache is used offline, with the bundled catalogue as the initial
-fallback. Update Pi for newly added model metadata. Free-model availability
-and limits can change upstream; there is no automatic paid fallback.
+Requests with no tools at all (compaction, title generation, judgment) get a
+single inert placeholder named `read` plus a one-line note telling the model not
+to call it. The gate requires the name; nothing else about the definition is
+checked.
 
-Requests use Pi's native retry handling (two retries by default) and a
-180-second per-request timeout. Caller overrides and cancellation are honored.
-Muse Spark currently accepts only `tool_choice: auto`; normal Pi tool use does
-not require forced tool choice.
+Responses-lane turns can be rejected with
+``400 reasoning `encrypted_content` was not issued to this caller`` when Zen
+rotates the conversation to a backend that no longer holds the encryption key.
+The provider retries that request once with stale `reasoning` items (and
+orphaned `fc_*` ids) stripped, which the upstream accepts as a fresh session.
 
-## Memory extensions (pi-hermes-memory)
+Set `OMP_OPENCODE_FREE_DEBUG=1` to log the outbound identity and request shape
+to stderr. Content is never logged.
 
-Background-review direct transport (`pi-ai/compat completeSimple`) bypasses
-the `stream()` wrapper, so this extension patches the global compat registry
-at load: `opencode-zen-free` models get the full dynamic identity there too
-(`Bearer public`, OpenCode `User-Agent` / `x-opencode-client` / `project` /
-per-session correlation headers, plus the
-encrypted-content retry), while other providers pass through untouched. No
-memory config needed for the default direct transport — and compat omission
-stays `off`, preserving Hermes `llmThinkingOverride: off` (no forced `xhigh`
-on this path).
+## Free-tier gate, live-probed 2026-10-16
 
-As a last resort, a fetch guard scoped strictly to `https://opencode.ai/inference/v1`
-adds the same identity at the network edge for any other in-process path
-(Pi core flows such as compaction, present or future) — other hosts pass
-through untouched, and a valid upstream session / existing Authorization are
-preserved. `node:http`/`https` callers (axios / node-fetch style, any extension
-or in-process MCP tool) get the same treatment. Separate processes, direct
-`undici` imports, and WebSocket are the only gaps — Zen transports are
-fetch/SSE, so those don't apply in practice.
+Probes against `https://opencode.ai/zen/v1/chat/completions`, anonymous
+(`Bearer public`), one variable per request:
 
-The `pi -p --no-session` subprocess transport is a separate process, so no
-in-process patch can cover it: it loads `--no-extensions` + Hermes only and
-cannot see `opencode-zen-free` on its own. That path only runs when direct
-fails (or `reviewTransport` is forced to `subprocess`), so with direct fixed
-no config is needed. If you force subprocess, expose this package to the
-child with an absolute file path:
+| Request | Result |
+| --- | --- |
+| non-streaming, any headers/tools | `403 FreeTierError` |
+| streaming, tools named `read` | `200` |
+| streaming, `read` + `shell` | `200` |
+| streaming, stub `read` (wrong description/schema) | `200` |
+| streaming, `read`-less tool list | `403 FreeTierError` |
+| streaming, `shell` only | `403 FreeTierError` |
+| streaming, UUID or missing `x-opencode-session` | `403 FreeTierError` |
+| streaming, `read`, 11 mixed system prompts + tool history | `200`, tool call intact |
+| streaming, `read`, OpenCode summary prompt / omp summary prompt / 4000-char prompt | `200` |
+| streaming, `read`, `tool_choice: "none"` / `"auto"` | `200` |
+| streaming, `read`, `Authorization: Bearer <real Zen key>` | `200` |
+| non-streaming, `read`, real Zen key | `403 FreeTierError` |
+| `/zen/v1/responses`, `read`, `muse-spark-1.3-contributor-free` | `200` |
+| `/zen/v1/responses`, no tools | `403 FreeTierError` |
 
-```json
-{
-  "childExtensionPaths": ["/path/to/pi-opencode-direct/src/index.ts"]
-}
-```
+So the gate checks streaming, one tool named `read`, and the session id's shape
+and small counter. It does not check tool definitions, the user agent version,
+`x-opencode-client`, `x-opencode-project`, `x-opencode-session-id`,
+`x-session-affinity`, `X-Session-Id`, the system prompt, or the route
+(`/zen/v1` and `/inference/v1` both answer). The extension sends only the
+headers that were verified to work; the extra correlation headers cost a `401
+Invalid credential` on `/inference/v1` and buy nothing.
+
+Anonymous quota is shared per egress IP (Zen counts input + output + reasoning
+tokens against a server-side trial bucket), so heavy anonymous traffic from one
+address can exhaust it for every client behind it. Attach a key when that
+happens.
 
 ## Development
 
 ```sh
 npm ci --ignore-scripts
-npm run verify
+npm run verify                          # tsc + fixture tests + pack dry run
 
-# Optional: sends real requests to Zen
-npm run test:live
+bun run test/live                       # optional: real free-tier requests
+OPENCODE_FREE_MODEL=space-bunny-free bun run test/live.ts
 ```
 
-`npm test` uses in-memory HTTP fixtures, with no network or model calls.
-`test:live` is opt-in and sends two small free-tier requests to verify images,
-xhigh reasoning, native streaming tool calls, and replay of a tool result.
-Use the free tier lightly and follow the provider's data-use policies.
-
-Validated with Pi 1.3.0 and OpenCode CLI 2.0.30: twenty-one automated tests; live chat with a
-native tool-call/result round trip; and a Pi CLI session that used `read` on a
-PNG and correctly described it while OpenCode was absent from `PATH`.
-
-`npm run verify` runs type checking, fixture tests, and an npm package dry run.
-CI runs these checks on Node 22, 24, and 26. See [PUBLISHING.md](PUBLISHING.md)
-for release steps and [CHANGELOG.md](CHANGELOG.md) for changes.
+`npm test` runs the fixture suite under Bun (the omp runtime; Node cannot strip
+types inside `node_modules`). Fixtures use an in-memory fetch and a stubbed SSE
+body: no network, no model calls. `bun run test/live` sends real requests to the
+anonymous tier (vision, streamed tool call, tool-result replay, and a tool-less
+compaction-style request). Use the free tier lightly and follow the provider's
+data-use policies.
 
 ## License
 
-MIT. This is an independent extension, not an official OpenCode or Pi package.
+MIT. This is an independent extension, not an official OpenCode or omp package.

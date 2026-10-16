@@ -1,34 +1,56 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { patchCompatDirectTransport, patchGlobalFetchForZen, patchNodeHttpForZen, zenProvider } from "./provider.ts";
+/**
+ * omp extension: OpenCode Zen's free models as a first-class provider.
+ *
+ * Registers `opencode-zen-free` with a real `/login` entry, omp's bundled
+ * catalogue of free Zen models, live model discovery, and an extension-owned
+ * transport that carries the OpenCode fingerprint the free tier requires.
+ *
+ * Why a separate provider id: omp's built-in `opencode-zen` hard-overwrites
+ * `x-opencode-session` with the conversation id for that provider id
+ * (`applyInferenceHeaders`), and the gate only accepts a freshly minted `ses_`
+ * id. A distinct id keeps omp's identity projection out of the request.
+ */
 
-export default function (pi: ExtensionAPI) {
-  let context: ExtensionContext | undefined;
-  const remember = (_event: unknown, ctx: ExtensionContext) => { context = ctx; };
-  pi.on("session_start", remember);
-  pi.on("before_agent_start", remember);
-  const getSessionId = () => context?.sessionManager.getSessionId();
-  pi.registerProvider(zenProvider(getSessionId));
-  // Cover side-channels that bypass Models (e.g. pi-hermes-memory direct
-  // transport via pi-ai/compat): same Zen identity, no per-user config.
-  // Never let a side-channel patch failure break provider registration.
-  try {
-    patchCompatDirectTransport(getSessionId);
-  } catch {
-    // Main-path streaming still works; direct side-channels fall back to
-    // static model/auth headers.
-  }
-  // Last resort: any other in-process fetch to Zen (present/future Pi flows
-  // such as compaction if rerouted) still carries the identity.
-  try {
-    patchGlobalFetchForZen(getSessionId);
-  } catch {
-    // Wrappers above already cover the known paths.
-  }
-  // Same for non-fetch callers (axios / node-fetch style) in any extension
-  // or in-process MCP tool.
-  try {
-    patchNodeHttpForZen(getSessionId);
-  } catch {
-    // Fetch-level coverage above is the common case.
-  }
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import {
+	ANONYMOUS_API_KEY,
+	BASE_URL,
+	PROVIDER_ID,
+	ZEN_API,
+	ZEN_API_KEY_ENV,
+	fetchFreeModels,
+	zenModels,
+	zenStreamSimple,
+} from "./provider.ts";
+
+export default function opencodeFreeExtension(pi: ExtensionAPI): void {
+	pi.setLabel("OpenCode Zen Free");
+	pi.registerProvider(PROVIDER_ID, {
+		api: ZEN_API,
+		baseUrl: BASE_URL,
+		// Fallback only: registering `oauth` makes a stored credential win, so
+		// this literal is sent solely when no `/login` credential exists.
+		apiKey: ANONYMOUS_API_KEY,
+		authHeader: false,
+		models: zenModels(),
+		streamSimple: zenStreamSimple,
+		fetchDynamicModels: fetchFreeModels,
+		oauth: {
+			name: "OpenCode Zen",
+			async login(callbacks) {
+				const entered = (
+					await callbacks.onPrompt({
+						message: `OpenCode Zen API key (leave empty for the anonymous free tier, or set ${ZEN_API_KEY_ENV})`,
+						secret: true,
+					})
+				).trim();
+				if (entered.length === 0) {
+					throw new Error(
+						"No key entered. The anonymous free tier needs no login: use the models directly.",
+					);
+				}
+				return entered;
+			},
+		},
+	});
 }
