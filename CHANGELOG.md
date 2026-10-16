@@ -24,6 +24,12 @@ through omp's own `read` tool.
   `opencode/latest/2.0.26/cli`, and `Authorization`. Auxiliary calls without
   tools get one inert `read` placeholder plus a note; caller tools, history,
   and system prompts are never rewritten.
+- Responses-lane models carry the catalogue `compat` object into the delegated
+  call. omp's OpenCode Responses handler dereferences `model.compat` at session
+  start and the registry leaves the field undefined for extension-registered
+  models, so a Responses turn used to crash with `undefined is not an object
+  (evaluating 'e.compat.connectionBoundNativeHistory')` before any request went
+  out. Chat Completions models stay exactly as omp resolved them.
 - Responses-lane rotation is retried once with stale `reasoning` items
   stripped (unchanged behaviour, same helper).
 - Removed as unnecessary, each verified by live probe: the `read` →

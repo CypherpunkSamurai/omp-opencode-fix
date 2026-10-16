@@ -96,6 +96,34 @@ function visionContext(): Context {
 	};
 }
 
+/** A model may answer with the word or with hex; accept both for the same colour. */
+function isBlue(value: unknown): boolean {
+	return matchesColor(value, /blue/, hex => hex.b > hex.r + 30 && hex.b > hex.g + 30);
+}
+
+function isYellow(value: unknown): boolean {
+	return matchesColor(value, /yellow/, hex => hex.r > 150 && hex.g > 150 && hex.b < 120);
+}
+
+function matchesColor(value: unknown, word: RegExp, hexTest: (hex: Rgb) => boolean): boolean {
+	const text = String(value).trim().toLowerCase();
+	if (word.test(text)) return true;
+	const match = /^#?([0-9a-f]{6})$/.exec(text);
+	if (!match) return false;
+	const digits = match[1];
+	return hexTest({
+		r: Number.parseInt(digits.slice(0, 2), 16),
+		g: Number.parseInt(digits.slice(2, 4), 16),
+		b: Number.parseInt(digits.slice(4, 6), 16),
+	});
+}
+
+interface Rgb {
+	r: number;
+	g: number;
+	b: number;
+}
+
 for (const modelId of modelIds) {
 	const catalogue = getBundledModels("opencode-zen").find(model => model.id === modelId);
 	assert.ok(catalogue, `${modelId} is not in the bundled opencode-zen catalogue`);
@@ -111,8 +139,8 @@ for (const modelId of modelIds) {
 	const call = first.content.find(block => block.type === "toolCall");
 	assert.ok(call && call.type === "toolCall");
 	assert.equal(call.name, "record_colors");
-	assert.match(String(call.arguments.background), /blue|0000ff/i);
-	assert.match(String(call.arguments.square), /yellow|ffff00/i);
+	assert.ok(isBlue(call.arguments.background), `background was ${String(call.arguments.background)}`);
+	assert.ok(isYellow(call.arguments.square), `square was ${String(call.arguments.square)}`);
 	console.log(
 		JSON.stringify({
 			check: "vision + streamed tool call over the free tier",

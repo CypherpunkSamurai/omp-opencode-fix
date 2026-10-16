@@ -288,6 +288,46 @@ export function wireApiFor(modelId: string): ZenWireApi {
 	return known?.wireApi ?? wireApiOf({}, modelId) ?? "openai-completions";
 }
 
+/** Bundled compat objects by model id; the catalogue ships one per known model. */
+let bundledCompatCache: Map<string, Model<Api>["compat"]> | undefined;
+
+function bundledCompat(id: string): Model<Api>["compat"] | undefined {
+	if (!bundledCompatCache) {
+		const cache = new Map<string, Model<Api>["compat"]>();
+		for (const model of getBundledModels("opencode-zen") as Model<Api>[]) {
+			if (model.compat) cache.set(model.id, model.compat);
+		}
+		bundledCompatCache = cache;
+	}
+	return bundledCompatCache.get(id);
+}
+
+/** Template for a Responses-lane id the catalogue has not seen yet. */
+function responsesCompatTemplate(): Model<Api>["compat"] | undefined {
+	for (const model of getBundledModels("opencode-zen") as Model<Api>[]) {
+		if (model.compat && wireApiOf(model, model.id) === "openai-responses") return model.compat;
+	}
+	return undefined;
+}
+
+/**
+ * Compat for the model handed to omp's transport. omp's OpenCode Responses
+ * handler dereferences `model.compat` at entry (`nativeHistoryReplayWarmed`,
+ * `supportsImageDetailOriginal`) without a guard, while the Chat Completions
+ * handler resolves its own compat when the field is missing. The registry hands
+ * extension models an undefined compat, so the Responses lane has to supply
+ * one; the catalogue value is what the built-in `opencode-zen` provider sends
+ * for the same model. The Completions lane is left exactly as omp resolved it.
+ */
+export function delegatedCompat(model: Model<Api>, wireApi: ZenWireApi): Model<Api>["compat"] | undefined {
+	if (model.compat) return model.compat;
+	if (wireApi !== "openai-responses") return undefined;
+	const compat = bundledCompat(model.id) ?? responsesCompatTemplate();
+	// An empty object is still a guard: the handler's compat reads tolerate
+	// absent keys, they do not tolerate an absent compat.
+	return compat ?? ({} as Model<Api>["compat"]);
+}
+
 /**
  * Live catalogue refresh. The host caches the result (SQLite, provider-keyed)
  * and keeps the static list as fallback, so a failed refresh never empties the
@@ -440,6 +480,7 @@ export function buildZenRequest(
 		Authorization: `Bearer ${apiKey}`,
 	};
 	const wireApi = wireApiFor(model.id);
+	const compat = delegatedCompat(model, wireApi);
 	return {
 		model: {
 			...model,
@@ -447,6 +488,7 @@ export function buildZenRequest(
 			provider: PROVIDER_ID,
 			baseUrl: BASE_URL,
 			headers: { ...(model.headers ?? {}), ...staticZenHeaders() },
+			...(compat ? { compat } : {}),
 		},
 		context: ensureFreeTierTools(context),
 		options: {

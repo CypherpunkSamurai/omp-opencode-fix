@@ -83,6 +83,13 @@ single inert placeholder named `read` plus a one-line note telling the model not
 to call it. The gate requires the name; nothing else about the definition is
 checked.
 
+Responses-lane models carry their catalogue `compat` object into the delegated
+call. omp's OpenCode Responses handler dereferences `model.compat` while it
+starts a session, and the model registry leaves that field undefined for
+extension-registered models, so delegating a Responses model without it crashes
+the turn before the request is sent. Chat Completions models are left as omp
+resolved them: that handler builds its own compat when the field is absent.
+
 Responses-lane turns can be rejected with
 ``400 reasoning `encrypted_content` was not issued to this caller`` when Zen
 rotates the conversation to a backend that no longer holds the encryption key.

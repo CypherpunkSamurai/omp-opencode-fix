@@ -57,6 +57,8 @@ function registryModel(id: string): Model<Api> {
 		provider: PROVIDER_ID,
 		api: ZEN_API,
 		baseUrl: BASE_URL,
+		// omp's registry drops the compat object for extension-registered models.
+		compat: undefined,
 	};
 }
 
@@ -200,6 +202,47 @@ test("built request carries the free-tier identity and keeps caller inputs", () 
 	assert.equal(request.options.sessionId, "session-x");
 	assert.equal(typeof request.options.fetch, "function");
 	assert.equal(request.sessionId, "session-x");
+});
+
+test("Responses-lane delegation supplies the compat omp's handler requires", () => {
+	__clearSessionHeaderCacheForTests();
+	const model = registryModel("muse-spark-1.3-contributor-free");
+	const context: Context = { messages: [{ role: "user", content: "hello", timestamp: 0 }], tools: [readTool] };
+	const request = buildZenRequest(model, context, { sessionId: "session-compat" });
+
+	assert.equal(request.model.api, "openai-responses");
+	const compat = request.model.compat as Record<string, unknown> | undefined;
+	assert.ok(compat, "the Responses handler dereferences model.compat at entry");
+	assert.equal(compat.supportsImageDetailOriginal, false);
+	assert.equal(compat.connectionBoundNativeHistory, false, "the flag omp dereferences unguarded must exist");
+	assert.deepEqual(compat, catalogueModel("muse-spark-1.3-contributor-free").compat);
+});
+
+test("an unknown Responses-lane id still gets catalogue-shaped compat", () => {
+	__clearSessionHeaderCacheForTests();
+	const model = { ...registryModel("muse-spark-1.3-contributor-free"), id: "muse-spark-9.9-contributor-free" };
+	const context: Context = { messages: [{ role: "user", content: "hello", timestamp: 0 }], tools: [readTool] };
+	const request = buildZenRequest(model, context, { sessionId: "session-future" });
+
+	assert.equal(request.model.api, "openai-responses");
+	const compat = request.model.compat as Record<string, unknown> | undefined;
+	assert.ok(compat, "a synthetic Responses model must not leave compat undefined");
+	assert.equal(compat.supportsImageDetailOriginal, false);
+});
+
+test("Chat Completions models keep the compat omp resolved for them", () => {
+	__clearSessionHeaderCacheForTests();
+	const model = registryModel("mimo-v2.6-flash-free");
+	const context: Context = { messages: [{ role: "user", content: "hello", timestamp: 0 }], tools: [readTool] };
+
+	const untouched = buildZenRequest(model, context, { sessionId: "session-untouched" });
+	assert.equal(untouched.model.compat, undefined, "the completions handler resolves its own compat");
+
+	const supplied = { supportsSamplingParams: false };
+	const withHostCompat = buildZenRequest({ ...model, compat: supplied } as Model<Api>, context, {
+		sessionId: "session-host-compat",
+	});
+	assert.equal(withHostCompat.model.compat, supplied, "host-resolved compat wins over the catalogue value");
 });
 
 test("the same omp session reuses one Zen session id between turns", () => {
