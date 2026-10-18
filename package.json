@@ -1,6 +1,6 @@
 {
   "name": "omp-opencode-fix",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "OpenCode Zen free models for omp (oh-my-pi), using native HTTP APIs and the OpenCode free-tier fingerprint",
   "type": "module",
   "license": "MIT",

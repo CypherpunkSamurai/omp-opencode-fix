@@ -207,40 +207,73 @@ export function prettyFreeName(id: string): string {
 		.join(" ");
 }
 
-/** Ids that look free but are not chat models (classifier and friends). */
-const NON_CHAT_FREE_PREFIXES = ["jev-"];
+/**
+ * Catalogue OpenCode itself reads (`provider/models.ts`: `https://models.dev/api.json`,
+ * cached to `models.json`). Its `opencode` provider entry carries the per-model
+ * `cost`, `name`, and `status` this provider prices and names its roster from.
+ */
+export const MODELS_DEV_URL = "https://models.dev/api.json";
+export const MODELS_DEV_PROVIDER = "opencode";
 
-/** True for a free-looking id the bundled catalogue does not know. */
-export function isUnknownFreeId(id: unknown): boolean {
-	if (typeof id !== "string" || id.length === 0) return false;
-	if (NON_CHAT_FREE_PREFIXES.some(prefix => id.startsWith(prefix))) return false;
-	return /(^|[/:_-])free([/:_-]|$)/i.test(id) || /-free$/i.test(id);
+function recordOf(value: unknown): Record<string, unknown> | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	const out: Record<string, unknown> = {};
+	for (const [key, item] of Object.entries(value)) out[key] = item;
+	return out;
 }
 
 /**
- * Conservative entry for a free model Zen serves that omp's bundled catalogue
- * has not seen yet. `pi update --models` (or the next omp release) replaces it
- * once official metadata ships.
+ * OpenCode's own free test (`cli/cmd/tui/component/dialog-model.tsx`): a model
+ * is free when `cost.input === 0` on the `opencode` provider — that single
+ * field is what the picker reads, and what this roster follows. A model whose
+ * cost is absent is not free: freeness is an observed price, never an inferred
+ * one, and never a guess from the id.
  */
-export function syntheticFreeModel(id: string): ProviderModelConfig {
+export function isFreeCost(cost: unknown): boolean {
+	const record = recordOf(cost);
+	return record !== undefined && record["input"] === 0;
+}
+
+/**
+ * Config for a free models.dev entry the bundled catalogue does not know yet.
+ * Every field comes from the payload OpenCode reads: the name is the upstream
+ * display name (no "Free" is invented, no id is reformatted into one), the
+ * zero price is an observed `cost` value, and the limits are the served ones.
+ */
+export function modelsDevFreeModel(id: string, entry: Record<string, unknown>): ProviderModelConfig {
+	const cost = recordOf(entry["cost"]) ?? {};
+	const limit = recordOf(entry["limit"]) ?? {};
+	const modalities = recordOf(entry["modalities"]) ?? {};
+	const modalityInputs = Array.isArray(modalities["input"]) ? modalities["input"] : [];
+	const input: Array<"text" | "image"> = ["text"];
+	if (modalityInputs.includes("image")) input.push("image");
 	return {
 		id,
-		name: prettyFreeName(id),
+		name:
+			typeof entry["name"] === "string" && entry["name"].length > 0 ? entry["name"] : prettyFreeName(id),
 		api: ZEN_API,
 		kind: "chat",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 262_144,
-		maxTokens: 32_768,
+		reasoning: entry["reasoning"] !== false,
+		input,
+		cost: {
+			input: typeof cost["input"] === "number" ? cost["input"] : 0,
+			output: typeof cost["output"] === "number" ? cost["output"] : 0,
+			cacheRead: typeof cost["cache_read"] === "number" ? cost["cache_read"] : 0,
+			cacheWrite: typeof cost["cache_write"] === "number" ? cost["cache_write"] : 0,
+		},
+		contextWindow: typeof limit["context"] === "number" ? limit["context"] : 262_144,
+		maxTokens: typeof limit["output"] === "number" ? limit["output"] : 32_768,
+		headers: staticZenHeaders(),
 	};
 }
 
 function toProviderModel(model: Model<Api>): ZenModelEntry | undefined {
 	const wireApi = wireApiOf(model, model.id);
 	if (!wireApi || !WIRE_APIS.includes(wireApi)) return undefined;
-	const { cost } = model;
-	if (cost.input !== 0 || cost.output !== 0 || cost.cacheRead !== 0 || cost.cacheWrite !== 0) return undefined;
+	// OpenCode's free rule, verbatim: `cost.input === 0`. The other three prices
+	// are carried through, not tested — the picker opencode ships reads only the
+	// input price, so a model it calls free must not be dropped here.
+	if (!isFreeCost(model.cost)) return undefined;
 	return {
 		wireApi,
 		config: {
@@ -329,36 +362,81 @@ export function delegatedCompat(model: Model<Api>, wireApi: ZenWireApi): Model<A
 }
 
 /**
- * Live catalogue refresh. The host caches the result (SQLite, provider-keyed)
- * and keeps the static list as fallback, so a failed refresh never empties the
- * picker. Unknown free ids are registered with conservative metadata.
+ * Live roster from models.dev — the catalogue OpenCode itself reads. A model
+ * makes the list when its `cost.input` is zero and its `status` is not
+ * `deprecated`; both tests are OpenCode's own (`dialog-model.tsx`), so the
+ * roster matches what its picker marks "Free" and never offers a retired id.
+ *
+ * The Zen gateway's own `/models` list is not consulted: it carries ids only —
+ * no price, no name, no status — and it is not an availability truth either
+ * (it omitted `muse-spark-1.2-contributor-free`, which still answered a live
+ * turn). Prices come from the price list; names come from upstream.
+ *
+ * The host caches the result (SQLite, provider-keyed) and keeps the static
+ * list as fallback, so a failed refresh never empties the picker.
  */
-export async function fetchFreeModels(apiKey: string | undefined): Promise<readonly ProviderModelConfig[]> {
-	const known = zenModelEntries();
-	const knownById = new Map(known.map(entry => [entry.config.id, entry]));
-	const apiKeyValue = resolveZenApiKey(apiKey);
-	const response = await fetch(`${BASE_URL}/models`, {
-		signal: AbortSignal.timeout(5_000),
-		headers: {
-			...(apiKeyValue === ANONYMOUS_API_KEY ? {} : { Authorization: `Bearer ${apiKeyValue}` }),
-			"User-Agent": OPENCODE_USER_AGENT,
-		},
+export async function fetchFreeModels(
+	_apiKey: string | undefined,
+	timeoutMs = 10_000,
+): Promise<readonly ProviderModelConfig[]> {
+	const knownById = new Map(zenModelEntries().map(entry => [entry.config.id, entry]));
+	// models.dev is a public catalogue: it never sees the Zen credential, so a
+	// stored key cannot leak to a third party through a refresh.
+	const response = await fetch(MODELS_DEV_URL, {
+		signal: AbortSignal.timeout(timeoutMs),
+		headers: { "User-Agent": OPENCODE_USER_AGENT },
 	});
-	if (!response.ok) throw new Error(`Zen model catalogue: HTTP ${response.status}`);
+	if (!response.ok) throw new Error(`models.dev catalogue: HTTP ${response.status}`);
 	const payload: unknown = await response.json();
-	if (!payload || typeof payload !== "object" || !("data" in payload) || !Array.isArray(payload.data)) {
-		throw new Error("Zen model catalogue: invalid payload");
+	const provider = recordOf(recordOf(payload)?.[MODELS_DEV_PROVIDER]);
+	const models = recordOf(provider?.["models"]);
+	if (!models) throw new Error(`models.dev catalogue: no ${MODELS_DEV_PROVIDER} provider`);
+	const free: ProviderModelConfig[] = [];
+	for (const [id, value] of Object.entries(models)) {
+		const entry = recordOf(value);
+		if (!entry) continue;
+		if (entry["status"] === "deprecated") continue;
+		if (!isFreeCost(entry["cost"])) continue;
+		const known = knownById.get(id)?.config;
+		// Known ids keep the pi-shaped metadata (thinking options, compat,
+		// tool flags) and take the upstream display name; new ids are built
+		// from the models.dev fields alone.
+		free.push(
+			known
+				? {
+						...known,
+						name:
+							typeof entry["name"] === "string" && entry["name"].length > 0 ? entry["name"] : known.name,
+					}
+				: modelsDevFreeModel(id, entry),
+		);
 	}
-	const available = new Set(
-		payload.data.map((model: unknown) =>
-			model && typeof model === "object" && "id" in model ? model.id : undefined,
-		),
-	);
-	const listed = known.filter(entry => available.has(entry.config.id)).map(entry => entry.config);
-	const unknown = [...available]
-		.filter((id): id is string => typeof id === "string" && !knownById.has(id) && isUnknownFreeId(id))
-		.sort();
-	return [...listed, ...unknown.map(syntheticFreeModel)];
+	free.sort((a, b) => a.id.localeCompare(b.id));
+	return free;
+}
+
+/** Registration fetch budget. The host awaits the extension factory, so this is user-visible startup time. */
+export const REGISTRATION_FETCH_TIMEOUT_MS = 4_000;
+
+/**
+ * Roster the extension registers at startup.
+ *
+ * The host merges the registered list with whatever `fetchDynamicModels`
+ * returns, so a stale registered list keeps its models in the picker for the
+ * whole session — the bundled `opencode-zen` catalogue carries no `status`
+ * field and would hold retired ids there forever. Fetching before registering
+ * makes the registered list the live one; the bundled catalogue is then only
+ * the offline fallback, and the host's own refresh corrects it later.
+ */
+export async function registrationModels(): Promise<ProviderModelConfig[]> {
+	try {
+		const live = await fetchFreeModels(undefined, REGISTRATION_FETCH_TIMEOUT_MS);
+		if (live.length > 0) return [...live];
+		debugLog(`models.dev roster was empty; registering the bundled fallback`);
+	} catch (error) {
+		debugLog(`models.dev roster unavailable (${String(error)}); registering the bundled fallback`);
+	}
+	return zenModels();
 }
 
 /* ------------------------------------------------------------------------- *

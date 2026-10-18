@@ -1,9 +1,10 @@
 /**
  * omp extension: OpenCode Zen's free models as a first-class provider.
  *
- * Registers `opencode-zen-free` with a real `/login` entry, omp's bundled
- * catalogue of free Zen models, live model discovery, and an extension-owned
- * transport that carries the OpenCode fingerprint the free tier requires.
+ * Registers `opencode-zen-free` with a real `/login` entry, the live
+ * models.dev free roster (the bundled catalogue as offline fallback), live
+ * model discovery, and an extension-owned transport that carries the OpenCode
+ * fingerprint the free tier requires.
  *
  * Why a separate provider id: omp's built-in `opencode-zen` hard-overwrites
  * `x-opencode-session` with the conversation id for that provider id
@@ -19,11 +20,11 @@ import {
 	ZEN_API,
 	ZEN_API_KEY_ENV,
 	fetchFreeModels,
-	zenModels,
+	registrationModels,
 	zenStreamSimple,
 } from "./provider.ts";
 
-export default function opencodeFreeExtension(pi: ExtensionAPI): void {
+export default async function opencodeFreeExtension(pi: ExtensionAPI): Promise<void> {
 	pi.setLabel("OpenCode Zen Free");
 	pi.registerProvider(PROVIDER_ID, {
 		api: ZEN_API,
@@ -32,7 +33,10 @@ export default function opencodeFreeExtension(pi: ExtensionAPI): void {
 		// this literal is sent solely when no `/login` credential exists.
 		apiKey: ANONYMOUS_API_KEY,
 		authHeader: false,
-		models: zenModels(),
+		// Fetched, not the bundled catalogue: the host merges this list with the
+		// dynamic one, so the registered list must already be the free-of-retired
+		// set the picker should show.
+		models: await registrationModels(),
 		streamSimple: zenStreamSimple,
 		fetchDynamicModels: fetchFreeModels,
 		oauth: {

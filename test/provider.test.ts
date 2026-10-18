@@ -17,6 +17,7 @@ import {
 	FREE_TIER_TOOL,
 	OPENCODE_CLIENT,
 	OPENCODE_USER_AGENT,
+	MODELS_DEV_URL,
 	PROVIDER_ID,
 	SESSION_FALLBACK_KEY,
 	SESSION_ID_PATTERN,
@@ -28,13 +29,14 @@ import {
 	ensureFreeTierTools,
 	fetchFreeModels,
 	isEncryptedContentError,
-	isUnknownFreeId,
+	isFreeCost,
+	modelsDevFreeModel,
 	prettyFreeName,
+	registrationModels,
 	resolveZenApiKey,
 	sessionHeader,
 	sessionPayload,
 	stripStaleReasoning,
-	syntheticFreeModel,
 	wireApiFor,
 	withEncryptedContentFallback,
 	zenModelEntries,
@@ -283,7 +285,7 @@ test("registered models are free chat models on the extension api", () => {
 	for (const { config } of entries) {
 		assert.equal(config.api, ZEN_API);
 		assert.equal(config.kind, "chat");
-		assert.deepEqual(config.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+		assert.equal(config.cost.input, 0, `${config.id} is registered but its input price is not zero`);
 		assert.ok((config.contextWindow ?? 0) > 0);
 		assert.ok((config.maxTokens ?? 0) > 0);
 	}
@@ -296,37 +298,128 @@ test("registered models are free chat models on the extension api", () => {
 test("paid catalogue models never reach the provider", () => {
 	const registered = new Set(zenModels().map(config => config.id));
 	for (const model of getBundledModels("opencode-zen")) {
-		const paid = model.cost.input !== 0 || model.cost.output !== 0;
+		const paid = model.cost.input !== 0;
 		if (paid) assert.ok(!registered.has(model.id), `${model.id} is paid but was registered`);
 	}
 });
 
-test("unknown free id synthesis is conservative and idempotent", () => {
-	assert.equal(isUnknownFreeId("new-model-free"), true);
-	assert.equal(isUnknownFreeId("new-model"), false);
-	assert.equal(isUnknownFreeId("jev-1.13-free"), false);
+test("free is the input price opencode's own picker reads", () => {
+	assert.equal(isFreeCost({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }), true);
+	assert.equal(isFreeCost({ input: 0, output: 1 }), true, "opencode marks free on the input price alone");
+	assert.equal(isFreeCost({ input: 0.5 }), false);
+	assert.equal(isFreeCost({}), false, "an unpriced model is not free");
+	assert.equal(isFreeCost(undefined), false);
 	assert.equal(prettyFreeName("step-5-preview-free"), "Step 5 Preview Free");
-	const synthetic = syntheticFreeModel("new-model-free");
-	assert.equal(synthetic.api, ZEN_API);
-	assert.equal(synthetic.reasoning, true);
-	assert.deepEqual(synthetic.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 });
 
-test("live refresh intersects known ids and adds unknown free ids", async () => {
+test("models.dev metadata names and sizes a free model omp has not seen", () => {
+	const config = modelsDevFreeModel("brand-new-free", {
+		name: "Brand New Free",
+		cost: { input: 0, output: 0, cache_read: 0 },
+		limit: { context: 999, output: 111 },
+		modalities: { input: ["text", "image", "audio"] },
+		reasoning: true,
+	});
+	assert.equal(config.id, "brand-new-free");
+	assert.equal(config.name, "Brand New Free");
+	assert.equal(config.api, ZEN_API);
+	assert.equal(config.kind, "chat");
+	assert.equal(config.reasoning, true);
+	assert.deepEqual(config.input, ["text", "image"]);
+	assert.deepEqual(config.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+	assert.equal(config.contextWindow, 999);
+	assert.equal(config.maxTokens, 111);
+});
+
+test("live refresh keeps free, non-deprecated models.dev entries", async () => {
 	const realFetch = globalThis.fetch;
-	const known = zenModels()[0];
-	assert.ok(known);
-	globalThis.fetch = (async (input: RequestInfo | URL) => {
-		assert.match(String(input), /\/models$/);
+	const known = zenModels().find(config => config.id === "mimo-v2.6-flash-free");
+	assert.ok(known, "the bundled catalogue carries mimo-v2.6-flash-free");
+	globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+		assert.equal(String(input), MODELS_DEV_URL);
+		const headers = new Headers(init?.headers);
+		assert.equal(headers.get("authorization"), null, "the Zen credential never reaches models.dev");
 		return new Response(
-			JSON.stringify({ data: [{ id: known.id }, { id: "brand-new-free" }, { id: "paid-model" }] }),
+			JSON.stringify({
+				opencode: {
+					models: {
+						"mimo-v2.6-flash-free": { name: "MiMo V2.6 Flash", cost: { input: 0, output: 0 } },
+						"brand-new-free": {
+							name: "Brand New Free",
+							cost: { input: 0, output: 0 },
+							limit: { context: 4096, output: 512 },
+							modalities: { input: ["text", "image"] },
+							reasoning: true,
+						},
+						"paid-model": { name: "Paid", cost: { input: 1, output: 2 } },
+						"retired-free": { name: "Retired", cost: { input: 0, output: 0 }, status: "deprecated" },
+						unpriced: { name: "Unpriced" },
+					},
+				},
+			}),
 			{ status: 200, headers: { "content-type": "application/json" } },
 		);
 	}) as typeof fetch;
 	try {
-		const models = await fetchFreeModels(undefined);
-		const ids = models.map(model => model.id);
-		assert.deepEqual(ids, [known.id, "brand-new-free"]);
+		const models = await fetchFreeModels("sk-secret");
+		assert.deepEqual(
+			models.map(model => model.id),
+			["brand-new-free", "mimo-v2.6-flash-free"],
+			"paid, retired, and unpriced entries stay out; the rest sort by id",
+		);
+		const knownEntry = models[1]!;
+		assert.equal(knownEntry.name, "MiMo V2.6 Flash", "the display name comes from models.dev");
+		assert.deepEqual(knownEntry.input, known.input, "a known id keeps its pi-shaped metadata");
+		assert.equal(knownEntry.maxTokens, known.maxTokens);
+		const freshEntry = models[0]!;
+		assert.equal(freshEntry.name, "Brand New Free");
+		assert.equal(freshEntry.kind, "chat");
+		assert.equal(freshEntry.contextWindow, 4096);
+		assert.equal(freshEntry.maxTokens, 512);
+		assert.deepEqual(freshEntry.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+	} finally {
+		globalThis.fetch = realFetch;
+	}
+});
+
+test("registration takes the live roster and never fails to produce one", async () => {
+	const realFetch = globalThis.fetch;
+	try {
+		globalThis.fetch = (async () =>
+			new Response(JSON.stringify({ opencode: { models: {} } }), {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			})) as typeof fetch;
+		const empty = await registrationModels();
+		assert.deepEqual(
+			empty.map(model => model.id),
+			zenModels().map(model => model.id),
+			"an empty free set falls back to the bundled catalogue",
+		);
+
+		globalThis.fetch = (async () => {
+			throw new Error("offline");
+		}) as typeof fetch;
+		const offline = await registrationModels();
+		assert.deepEqual(
+			offline.map(model => model.id),
+			zenModels().map(model => model.id),
+			"an unreachable catalogue falls back to the bundled catalogue",
+		);
+	} finally {
+		globalThis.fetch = realFetch;
+	}
+});
+
+test("live refresh fails loudly on a payload without the opencode provider", async () => {
+	const realFetch = globalThis.fetch;
+	globalThis.fetch = (async () =>
+		new Response(JSON.stringify({ anthropic: { models: {} } }), {
+			status: 200,
+			headers: { "content-type": "application/json" },
+		})) as typeof fetch;
+	try {
+		await assert.rejects(() => fetchFreeModels(undefined), /no opencode provider/);
 	} finally {
 		globalThis.fetch = realFetch;
 	}

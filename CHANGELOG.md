@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.4.0
+
+The roster now matches OpenCode's own model picker instead of the bundled
+catalogue, and retired models no longer reach it:
+
+- Free is `cost.input === 0` on the `opencode` provider with
+  `status !== "deprecated"` — the picker's exact test
+  (`cli/cmd/tui/component/dialog-model.tsx`). The earlier "all four prices are
+  zero" rule was ours, not OpenCode's.
+- `fetchDynamicModels` reads `https://models.dev/api.json` — the price list
+  OpenCode itself reads (`provider/models.ts`) — instead of
+  `GET /zen/v1/models`. That drops the retired ids (Zen now answers them with
+  `410 ModelDeprecated`) and replaces them with the live zero-price set: 10
+  models on 2026-10-18, each with its upstream display name and limits.
+- Id heuristics are gone: no `-free` suffix matching, no `jev-*` denylist, no
+  invented "Free" names. An id omp's catalogue has not seen is registered only
+  because models.dev prices its input at zero, using models.dev's own metadata.
+- The refresh no longer sends the Zen credential to models.dev; it was only
+  ever a public read.
+- Registration now fetches the live roster itself (4 s budget) instead of
+  registering the bundled catalogue. omp merges the registered list with the
+  dynamic one, so the bundle's retired ids survived every refresh: on omp
+  18.12.1 the picker exposed 36 ids (bundle 32 ∪ live 10) until registration
+  moved to the live fetch, and then exactly the 10. The extension factory is
+  async, which the host supports.
+- Documented invocation fixed: `--provider opencode-zen-free` is rejected
+  (`Unknown provider`) on omp 18.12.1 for extension providers, built-ins
+  resolve fine, and `--model opencode-zen-free/<id>` is the form that works.
+- `test/live.ts` probes models taken from the live roster (image-capable for the
+  vision check, all four checks passed 2026-10-18) and skips the Responses lane
+  while no free model uses it.
+- Deleted an untracked scratch copy of the old provider (`src/provider.static.ts`)
+  that `tsconfig` and `files` would have type-checked and published.
+
 ## 0.3.0
 
 Standalone OpenCode client (`src/opencode-client.ts`) that recreates

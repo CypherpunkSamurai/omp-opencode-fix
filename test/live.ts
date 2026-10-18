@@ -15,11 +15,46 @@ import { deflateSync } from "node:zlib";
 import type { Api, Context, Model } from "@oh-my-pi/pi-ai";
 import { getBundledModels } from "@oh-my-pi/pi-catalog/models";
 
-import { BASE_URL, PROVIDER_ID, ZEN_API, zenStreamSimple } from "../src/provider.ts";
+import { BASE_URL, PROVIDER_ID, ZEN_API, fetchFreeModels, wireApiFor, zenStreamSimple } from "../src/provider.ts";
 
-/** One model per wire lane: Chat Completions and Responses. */
-const DEFAULT_MODELS = ["longcat-2.5-preview-free", "muse-spark-1.3-contributor-free"];
-const modelIds = process.env.OPENCODE_FREE_MODEL ? [process.env.OPENCODE_FREE_MODEL] : DEFAULT_MODELS;
+/** Chat-lane default; the Responses lane is probed only while a free one exists. */
+const CHAT_PROBE_FALLBACK = "longcat-2.5-preview-free";
+
+/**
+ * Probe what a user can actually select: the ids come from the live free roster,
+ * not from a hardcoded list. Retired ids stay out automatically — Zen answers
+ * `410 ModelDeprecated` for them.
+ */
+const roster = await fetchFreeModels(undefined);
+console.log(
+	JSON.stringify({
+		check: "live free roster from models.dev",
+		passed: roster.length > 0,
+		count: roster.length,
+		ids: roster.map(model => model.id),
+	}),
+);
+assert.ok(roster.length > 0, "the free roster is empty");
+
+const bundled = getBundledModels("opencode-zen");
+// The probe sends an image, so the chat lane needs an image-capable model
+// (`beam-free`, for one, is text-only and answers "I cannot see the image").
+const chatProbe =
+	roster.find(
+		model =>
+			wireApiFor(model.id) === "openai-completions" &&
+			model.input.includes("image") &&
+			bundled.some(entry => entry.id === model.id),
+	)?.id ?? CHAT_PROBE_FALLBACK;
+const responsesProbe = roster.find(
+	model => wireApiFor(model.id) === "openai-responses" && bundled.some(entry => entry.id === model.id),
+)?.id;
+if (!responsesProbe) {
+	console.log(JSON.stringify({ check: "responses lane", passed: true, skipped: "no free responses-lane model" }));
+}
+const modelIds = process.env.OPENCODE_FREE_MODEL
+	? [process.env.OPENCODE_FREE_MODEL]
+	: [chatProbe, responsesProbe].filter((id): id is string => id !== undefined);
 
 function crc32(data: Uint8Array): number {
 	let crc = 0xffffffff;

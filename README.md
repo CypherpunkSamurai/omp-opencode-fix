@@ -22,20 +22,53 @@ omp plugin link .                       # or a checkout, symlinked into omp
 Restart omp, then select **OpenCode Zen Free** in `/model`:
 
 ```sh
-omp --provider opencode-zen-free --model muse-spark-1.3-contributor-free
+omp --model opencode-zen-free/mimo-v2.6-flash-free -p "…"
 omp models opencode-zen-free            # the free roster
 ```
 
-Every model in omp's bundled `opencode-zen` catalogue whose cost is zero and
-whose wire API is `openai-completions` or `openai-responses` is registered:
-`muse-spark-1.2/1.3-contributor-free` (Responses lane), plus the Chat
-Completions free models (`longcat-2.5-preview-free`, `mimo-v2.6-flash-free`,
-`nemotron-3.5-*`, `space-bunny-free`, `step-5-preview-free`, …).
-Anthropic- and Google-lane free ids are out of scope, and paid models are never
-registered. `fetchDynamicModels` refreshes the roster from
-`GET /zen/v1/models`; ids omp's catalogue has not seen yet (for example
-`deepseek-v4.1-flash-free`) are registered with conservative metadata until
-official metadata ships.
+The provider is an extension, so the legacy `--provider` flag does not resolve
+it (verified on omp 18.12.1: it rejects extension ids with `Unknown provider`
+and built-ins resolve fine); the `--model <provider>/<id>` form is the one that
+works.
+
+Free means what it means in OpenCode's own picker: `cost.input` is zero on the
+`opencode` provider and `status` is not `deprecated`
+(`cli/cmd/tui/component/dialog-model.tsx`). `fetchDynamicModels` reads the price
+list OpenCode itself reads, `https://models.dev/api.json`, so the roster is the
+non-retired zero-price set with the upstream display names and limits — ten
+models on 2026-10-18: `big-pickle`, `longcat-2.5-preview-free`, `beam-free`,
+`mimo-v2.6-flash-free`, `deepseek-v4.1-flash-free`, `glm-5.3-flash-free`,
+`nemotron-3-ultra-free`, `nemotron-3.5-lightning-free`,
+`nemotron-3.5-super-vl-free`, `space-bunny-free`. Ids the bundled catalogue has
+not seen yet arrive with their models.dev metadata in the same refresh. Zen
+retires models silently — the former `muse-spark-1.2/1.3-contributor-free` and
+`step-5-preview-free` ids now answer `410 ModelDeprecated` — and a deprecated
+entry never reaches the picker.
+
+Three things the roster deliberately does not do:
+
+- no availability intersection: Zen's own `/models` list carries ids only (no
+  price, no name, no status) and is not an availability truth either — it
+  omitted `muse-spark-1.2-contributor-free`, which still answered a live turn;
+- no id heuristics: freeness is an observed price, never a guess from a `-free`
+  suffix, so a paid model cannot be smuggled in by its name;
+- no credential to models.dev: the refresh is a public read, so a stored Zen key
+  is never sent to a third party.
+
+Paid models are never registered, and Anthropic- and Google-lane free ids are
+out of scope (their wire APIs are not `openai-completions` /
+`openai-responses`). The bundled `opencode-zen` catalogue is the offline
+fallback; it carries no `status` field, so a cold start with no reachable
+network lists a few retired ids until the first refresh lands.
+
+Registration itself fetches the live roster (4 s budget, `registrationModels`)
+and registers *that*. omp merges the registered list with whatever
+`fetchDynamicModels` returns, so registering the bundled catalogue would pin its
+retired ids in the picker for the whole session: verified on omp 18.12.1, where
+`omp models opencode-zen-free` exposed 36 ids — the bundle's 32 plus the live
+10 — until registration moved to the live fetch, after which it exposes exactly
+the 10. The factory is async, which the host supports
+(`ExtensionFactory = (pi) => void | Promise<void>`).
 
 ## Credentials
 
