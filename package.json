@@ -1,6 +1,6 @@
 {
   "name": "omp-opencode-fix",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "OpenCode Zen free models for omp (oh-my-pi), using native HTTP APIs and the OpenCode free-tier fingerprint",
   "type": "module",
   "license": "MIT",
@@ -29,7 +29,7 @@
     ]
   },
   "scripts": {
-    "test": "bun test test/provider.test.ts",
+    "test": "bun test",
     "check": "node ./node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
     "test:live": "bun run test/live.ts",
     "check:package": "npm pack --dry-run --ignore-scripts",

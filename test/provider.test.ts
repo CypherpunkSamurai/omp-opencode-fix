@@ -91,12 +91,22 @@ function chunk(delta: unknown): string {
 
 test("session ids match the gate grammar and carry a recent timestamp", () => {
 	__clearSessionHeaderCacheForTests();
+	const pinned = createDescendingSessionId(1_700_000_000_000);
+	assert.match(pinned, SESSION_ID_PATTERN);
+	assert.equal(
+		sessionPayload(pinned).timeLow36,
+		1_700_000_000_000 % 2 ** 36,
+		"the minted timestamp is the supplied clock",
+	);
+
 	const before = Date.now();
 	const id = createDescendingSessionId();
 	assert.match(id, SESSION_ID_PATTERN);
 	const payload = sessionPayload(id);
-	assert.equal(payload.timeLow36, before % 2 ** 36, "the minted timestamp is the current clock");
-	assert.ok(payload.timeLow36 <= Date.now() % 2 ** 36);
+	assert.ok(
+		payload.timeLow36 >= before % 2 ** 36 && payload.timeLow36 <= Date.now() % 2 ** 36,
+		"the default clock is now",
+	);
 	assert.ok(payload.counter >= 1 && payload.counter <= 16, `counter ${payload.counter} is outside the accepted range`);
 });
 

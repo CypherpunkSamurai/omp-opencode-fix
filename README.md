@@ -144,12 +144,55 @@ bun run test/live                       # optional: real free-tier requests
 OPENCODE_FREE_MODEL=space-bunny-free bun run test/live.ts
 ```
 
-`npm test` runs the fixture suite under Bun (the omp runtime; Node cannot strip
-types inside `node_modules`). Fixtures use an in-memory fetch and a stubbed SSE
+`npm test` runs the unit suite under Bun (the omp runtime; Node cannot strip
+types inside `node_modules`): the plugin entry (`plugin.test.ts`), the provider
+(`provider.test.ts`), and the wire-fixture client tests (`opencode-client*.test.ts`).
+Fixtures use an in-memory fetch and a stubbed SSE
 body: no network, no model calls. `bun run test/live` sends real requests to the
 anonymous tier (vision, streamed tool call, tool-result replay, and a tool-less
 compaction-style request). Use the free tier lightly and follow the provider's
 data-use policies.
+
+## Standalone client (`src/opencode-client.ts`)
+
+The same wire craft without omp: a zero-dependency client that recreates
+opencode 1.19.0 requests byte-for-byte, recovered from an HTTP capture and
+cross-checked against the request builder in the installed binary.
+
+```ts
+import {
+	buildOpencodeRequest,
+	buildResponsesBody,
+	createMessageId,
+	createSessionId,
+	rawRequestBlock,    // exact wire bytes incl. Bun-appended headers
+	sendOpencodeRequest,
+} from "./src/opencode-client.ts";
+
+const input = {
+	lane: "responses" as const, // or "chat"
+	sessionId: createSessionId(),
+	userId: createMessageId(),
+	providerId: "opencode",
+	body: buildResponsesBody({
+		model: "gpt-5.4-nano",
+		input: [{ role: "user", content: [{ type: "input_text", text: "hi" }] }],
+		maxOutputTokens: 32000,
+		include: ["reasoning.encrypted_content"],
+		reasoning: { effort: "none", summary: "auto" },
+	}),
+};
+
+const response = await sendOpencodeRequest(input); // streaming SSE passes through
+console.log(rawRequestBlock(buildOpencodeRequest(input))); // inspect the exact wire bytes
+```
+
+Byte-level fixture tests prove the responses body equals the captured
+3895-byte payload and the header block matches the capture line for line
+(sorted app headers, then Bun's `Connection`/`Accept`/`Host`/
+`Accept-Encoding`/`Content-Length`). To match opencode at the TLS layer too
+(JA3/JA4), run the client under the same Bun runtime it fingerprints
+(`runtime/bun/1.3.14`); fetch alone cannot control that.
 
 ## License
 

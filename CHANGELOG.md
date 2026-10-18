@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.0
+
+Standalone OpenCode client (`src/opencode-client.ts`) that recreates
+opencode 1.19.0 inference requests byte-for-byte, recovered from an HTTP
+capture (`opencode.xml`, Http 312/323) and cross-checked against the request
+builder in the installed 1.19.0 binary:
+
+- Headers reach the wire sorted by code unit, matching the capture:
+  `Authorization`, `Content-Type`, `User-Agent` (base + `ai-sdk/provider-utils/<lane>`
+  + `runtime/bun/1.3.14`), then `x-opencode-{client,project,request,session,session-id}`.
+  `rawRequestBlock` also emits the Bun-appended `Connection`/`Accept`/`Host`/
+  `Accept-Encoding`/`Content-Length` lines.
+- Bodies use exact per-lane key order (responses: `model, input,
+  max_output_tokens, store, include, reasoning, stream`; chat: `model,
+  max_tokens, messages, tools, tool_choice, stream`), compact JSON, tools
+  sorted by function name.
+- Byte-level fixture tests prove the responses body equals the captured
+  3895-byte payload and the header block matches line for line.
+- Unit tests for the extension entry (`test/plugin.test.ts`): registration
+  contract, free-tier config identity, roster filtering, and the `/login`
+  flow.
+
 ## 0.2.0
 
 Port to omp (oh-my-pi) 18.11.1. Verified end to end in omp: provider
